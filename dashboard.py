@@ -2,14 +2,99 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from models import Customer, Employee, MenuItem, Inventory, AccountBalance, Order, Base
+from models import Customer, Employee, MenuItem, Inventory, AccountBalance, Order, OrderItem, Base
 import pandas as pd
 import time
 import urllib.parse
 import os
+import random
+import datetime
+import pytz
 
 # Auto-refresh every 10 seconds
 st_autorefresh(interval=10 * 1000, key="datarefresh")
+
+# Business simulation settings
+OPEN_HOUR = 7
+CLOSE_HOUR = 19
+TIMEZONE = pytz.timezone('US/Eastern')
+PAYMENT_METHODS = ['cash', 'card', 'mobile']
+
+def is_business_open(now=None):
+    now = now or datetime.datetime.now(TIMEZONE)
+    return OPEN_HOUR <= now.hour < CLOSE_HOUR
+
+def simulate_transaction(session):
+    """Simulate a single transaction"""
+    try:
+        # Get random customer (or None for walk-in)
+        customers = session.query(Customer).all()
+        customer = random.choice(customers) if customers and random.random() > 0.2 else None
+        
+        # Get random employee
+        employees = session.query(Employee).all()
+        employee = random.choice(employees) if employees else None
+        
+        # Get random menu items (1-3 per order)
+        menu_items = session.query(MenuItem).filter_by(is_active=True).all()
+        if not menu_items:
+            return False
+            
+        num_items = random.randint(1, 3)
+        items = random.sample(menu_items, min(num_items, len(menu_items)))
+        
+        # Create order
+        order = Order(
+            customer_id=customer.id if customer else None,
+            employee_id=employee.id if employee else None,
+            order_time=datetime.datetime.now(TIMEZONE),
+            total_amount=0.0,
+            payment_method=random.choice(PAYMENT_METHODS)
+        )
+        session.add(order)
+        session.flush()  # Get order.id
+        
+        total = 0.0
+        for item in items:
+            quantity = random.randint(1, 2)
+            order_item = OrderItem(
+                order_id=order.id,
+                menu_item_id=item.id,
+                quantity=quantity,
+                item_price=item.price
+            )
+            session.add(order_item)
+            total += item.price * quantity
+            
+            # Update inventory (if tracked)
+            inv = session.query(Inventory).filter(Inventory.item_name.ilike(f'%{item.name}%')).first()
+            if inv:
+                inv.quantity_on_hand = max(0, inv.quantity_on_hand - quantity)
+        
+        order.total_amount = round(total, 2)
+        
+        # Update account balance
+        account = session.query(AccountBalance).order_by(AccountBalance.date.desc()).first()
+        if account:
+            account.balance += order.total_amount
+        
+        session.commit()
+        return True
+    except Exception as e:
+        session.rollback()
+        return False
+
+@st.cache_data(ttl=30)  # Cache for 30 seconds to avoid too frequent simulations
+def maybe_simulate_transaction():
+    """Maybe simulate a transaction if business is open"""
+    if is_business_open() and random.random() < 0.3:  # 30% chance per refresh
+        engine = create_engine('sqlite:///coffee_shop.db')
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        result = simulate_transaction(session)
+        session.close()
+        return result
+    return False
 
 # Database setup
 @st.cache_resource
@@ -35,6 +120,9 @@ engine = init_database()
 Session = sessionmaker(bind=engine)
 session = Session()
 
+# Try to simulate a transaction (only during business hours)
+maybe_simulate_transaction()
+
 # Sidebar navigation
 st.sidebar.title('Navigation')
 page = st.sidebar.radio(
@@ -43,6 +131,15 @@ page = st.sidebar.radio(
 )
 
 st.title('Coffee Shop Dashboard')
+
+# Business status indicator
+now = datetime.datetime.now(TIMEZONE)
+if is_business_open(now):
+    st.success(f"🟢 Business is OPEN (Hours: {OPEN_HOUR}:00 - {CLOSE_HOUR}:00 ET) - Live simulation running!")
+else:
+    st.info(f"🔴 Business is CLOSED (Hours: {OPEN_HOUR}:00 - {CLOSE_HOUR}:00 ET) - No new transactions")
+
+st.write(f"Current time (ET): {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
 if page == 'Home':
     st.header('Overview')
