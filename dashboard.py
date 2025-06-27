@@ -24,8 +24,10 @@ def is_business_open(now=None):
     now = now or datetime.datetime.now(TIMEZONE)
     return OPEN_HOUR <= now.hour < CLOSE_HOUR
 
-def simulate_transaction(session):
+def simulate_transaction(engine):
     """Simulate a single transaction"""
+    Session = sessionmaker(bind=engine)
+    session = Session()
     try:
         # Get random customer (or None for walk-in)
         customers = session.query(Customer).all()
@@ -73,27 +75,35 @@ def simulate_transaction(session):
         
         order.total_amount = round(total, 2)
         
-        # Update account balance
-        account = session.query(AccountBalance).order_by(AccountBalance.date.desc()).first()
-        if account:
-            account.balance += order.total_amount
+        # Update account balance - create new entry for today if needed
+        today = datetime.date.today()
+        account = session.query(AccountBalance).filter_by(date=today).first()
+        if not account:
+            # Get the most recent balance
+            latest_account = session.query(AccountBalance).order_by(AccountBalance.date.desc()).first()
+            starting_balance = latest_account.balance if latest_account else 1000.0
+            account = AccountBalance(
+                date=today,
+                balance=starting_balance,
+                notes='Daily balance tracking'
+            )
+            session.add(account)
+            session.flush()
+        
+        account.balance += order.total_amount
         
         session.commit()
+        session.close()
         return True
     except Exception as e:
         session.rollback()
+        session.close()
         return False
 
-@st.cache_data(ttl=30)  # Cache for 30 seconds to avoid too frequent simulations
-def maybe_simulate_transaction():
+def maybe_simulate_transaction(engine):
     """Maybe simulate a transaction if business is open"""
-    if is_business_open() and random.random() < 0.3:  # 30% chance per refresh
-        engine = create_engine('sqlite:///coffee_shop.db')
-        Session = sessionmaker(bind=engine)
-        session = Session()
-        result = simulate_transaction(session)
-        session.close()
-        return result
+    if is_business_open() and random.random() < 0.4:  # 40% chance per refresh
+        return simulate_transaction(engine)
     return False
 
 # Database setup
@@ -121,10 +131,20 @@ Session = sessionmaker(bind=engine)
 session = Session()
 
 # Try to simulate a transaction (only during business hours)
-maybe_simulate_transaction()
+transaction_created = maybe_simulate_transaction(engine)
 
 # Sidebar navigation
 st.sidebar.title('Navigation')
+
+# Show transaction status in sidebar
+if is_business_open():
+    if transaction_created:
+        st.sidebar.success("💰 New transaction created!")
+    else:
+        st.sidebar.info("⏳ Waiting for next transaction...")
+else:
+    st.sidebar.warning("🔒 Business closed")
+
 page = st.sidebar.radio(
     'Go to',
     ('Home', 'Customers', 'Employees', 'Menu Items', 'Inventory', 'Account Balance', 'Transactions/Orders')
