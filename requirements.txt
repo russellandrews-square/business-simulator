@@ -1,0 +1,5 @@
+streamlit
+streamlit-autorefresh
+sqlalchemy
+faker
+pandas 
