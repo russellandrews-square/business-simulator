@@ -2,16 +2,36 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from models import Customer, Employee, MenuItem, Inventory, AccountBalance, Order
+from models import Customer, Employee, MenuItem, Inventory, AccountBalance, Order, Base
 import pandas as pd
 import time
 import urllib.parse
+import os
 
 # Auto-refresh every 10 seconds
 st_autorefresh(interval=10 * 1000, key="datarefresh")
 
 # Database setup
-engine = create_engine('sqlite:///coffee_shop.db')
+@st.cache_resource
+def init_database():
+    engine = create_engine('sqlite:///coffee_shop.db')
+    
+    # Create tables if they don't exist
+    Base.metadata.create_all(engine)
+    
+    # Check if database is empty and seed it
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    
+    # If no customers exist, seed the database
+    if session.query(Customer).count() == 0:
+        from seed_db import seed_database
+        seed_database()
+    
+    session.close()
+    return engine
+
+engine = init_database()
 Session = sessionmaker(bind=engine)
 session = Session()
 
@@ -89,15 +109,18 @@ if page == 'Home':
     # Recent inventory reorder events
     st.subheader('Recent Inventory Reorders')
     try:
-        with open('reorder_log.txt', 'r') as f:
-            reorder_lines = f.readlines()[-10:]
-        if reorder_lines:
-            for line in reorder_lines:
-                st.text(line.strip())
+        if os.path.exists('reorder_log.txt'):
+            with open('reorder_log.txt', 'r') as f:
+                reorder_lines = f.readlines()[-10:]
+            if reorder_lines:
+                for line in reorder_lines:
+                    st.text(line.strip())
+            else:
+                st.write('No recent reorder events.')
         else:
-            st.write('No recent reorder events.')
-    except FileNotFoundError:
-        st.write('No reorder log found.')
+            st.write('No reorder log found.')
+    except Exception as e:
+        st.write('Unable to read reorder log.')
 
 elif page == 'Customers':
     st.header('Customers')
