@@ -162,6 +162,30 @@ else:
 st.write(f"Current time (ET): {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
 if page == 'Home':
+    # Gross Sales by Hour (Today)
+    st.subheader('Gross Sales by Hour (Today)')
+    import altair as alt
+    today = now.date()
+    orders_today = session.query(Order).filter(Order.order_time >= datetime.datetime.combine(today, datetime.time.min), Order.order_time <= datetime.datetime.combine(today, datetime.time.max)).all()
+    if orders_today:
+        # Group by hour
+        sales_by_hour = {}
+        for o in orders_today:
+            hour = o.order_time.hour
+            sales_by_hour[hour] = sales_by_hour.get(hour, 0) + o.total_amount
+        # Prepare DataFrame for chart
+        hours = list(range(OPEN_HOUR, CLOSE_HOUR))
+        sales = [sales_by_hour.get(h, 0) for h in hours]
+        hour_labels = [f'{(h-1)%12+1} {"AM" if h < 12 else "PM"}' for h in hours]
+        df_sales = pd.DataFrame({'Hour': hours, 'HourLabel': hour_labels, 'Gross Sales': sales})
+        chart = alt.Chart(df_sales).mark_bar().encode(
+            x=alt.X('HourLabel:N', title=None),
+            y=alt.Y('Gross Sales:Q', title=None, axis=alt.Axis(format='$,.2f'))
+        ).properties(width=600, height=300)
+        st.altair_chart(chart, use_container_width=True)
+    else:
+        st.write('No sales yet today.')
+
     st.header('Overview')
     # Basic stats
     num_customers = session.query(Customer).count()
